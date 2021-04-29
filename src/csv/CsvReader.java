@@ -1,8 +1,6 @@
 package csv;
 
-import java.io.BufferedReader;
 import java.io.IOException;
-import java.io.Reader;
 import java.io.StringReader;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -12,51 +10,78 @@ import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.Set;
 
+import csv.BasicReader.PeekableReader;
+
 /**
- * A class implementing a simple CSV reader according to RFC 4180.
- * To increase platform compatibility, we use LF (\n) as line separator and convert all other line endings accordingly.
+ * A class that implements a simple CSV reader according to RFC 4180.
+ * The field separator can be configured to another character than a comma.
+ * The line ending can be configured to either {@link #CR} ({@value #CR}), {@link #LF} ({@value #LF})  or {@link #CR_LF} ({@value #CR_LF}) using the provided constants.
  * 
  * @see <a href="https://tools.ietf.org/html/rfc4180">RFC 4180</a>
  */
 public class CsvReader implements AutoCloseable
 {
-	public static final int EOF = LineEndConvertingReader.EOF;
-	public static final char EOL = LineEndConvertingReader.EOL;
+	public static final int COMMA = ',';
+	public static final int CR_LF = ReplacingReader.REPLACE;
+	public static final int CR = ReplacingReader.CR;
+	public static final int LF = ReplacingReader.LF;
+	public static final int EOL = ReplacingReader.REPLACE;
+	public static final int EOF = ReplacingReader.EOF;
 	public static final char DOUBLE_QUOTES = '"';
-	public static final char SEPARATOR = ',';
 	public static final String[] STRING_ARRAY = new String[0];
 
-	protected LineEndConvertingReader input;
-	protected boolean hasNextRecord = true;
+	protected final PeekableReader input;
+	protected final String lineSeparator;
+	protected final int fieldSeparator;
 	protected final String[] header;
+	protected boolean hasNextRecord = true;
 	protected int numFields;
+	protected int line =1;
+	protected int column = 0;
+
+	/**
+	 * Create a CSV reader on an input.
+	 * Assume the file starts with a header of distinct fields and all records have the same number of fields.
+	 * Use a comma as field separator and CR;LF as line ending.
+	 * 
+	 * @param reader the underlying reader
+	 * @throws IOException If an I/O error occurs
+	 * @throws CsvFormatException If a CSV syntax error occurs
+	 */
+	public CsvReader(BasicReader reader) throws IOException, CsvFormatException
+	{
+		this(reader, true, true, true, COMMA, CR_LF);
+	}
 
 	/**
 	 * Create a CSV reader on an input.
 	 * Assume the file starts with a header of distinct fields and all records have the same number of fields.
 	 * 
 	 * @param reader the underlying reader
+	 * @param fieldSeparator the field separator, e.g., a comma or semicolon
+	 * @param lineSeparator the line ending, i.e., either {@link #CR} ({@value #CR}), {@link #LF} ({@value #LF})  or {@link #CR_LF} ({@value #CR_LF})
 	 * @throws IOException If an I/O error occurs
 	 * @throws CsvFormatException If a CSV syntax error occurs
 	 */
-	public CsvReader(Reader reader) throws IOException, CsvFormatException
+	public CsvReader(BasicReader reader, int fieldSeparator, int lineSeparator) throws IOException, CsvFormatException
 	{
-		this(reader, true, true);
+		this(reader, true, true, true, fieldSeparator, lineSeparator);
 	}
 
 	/**
 	 * Create a CSV reader on an input.
-	 * If a header is present, assume it has distinct fields.
+	 * Use a comma as field separator and CR;LF as line ending.
 	 * 
 	 * @param reader the underlying reader
 	 * @param hasHeader treat the first line as header
 	 * @param fixNumFields ensure all records have the same number of fields
+	 * @param distinctFieldNames check that the header fields are distinct
 	 * @throws IOException If an I/O error occurs
 	 * @throws CsvFormatException If a CSV syntax error occurs
 	 */
-	public CsvReader(Reader reader, boolean hasHeader, boolean fixNumFields) throws IOException, CsvFormatException
+	public CsvReader(BasicReader reader, boolean hasHeader, boolean fixNumFields, boolean distinctFieldNames) throws IOException, CsvFormatException
 	{
-		this(reader, hasHeader, fixNumFields, true);
+		this(reader,  hasHeader, fixNumFields, distinctFieldNames, COMMA, CR_LF);
 	}
 
 	/**
@@ -66,17 +91,37 @@ public class CsvReader implements AutoCloseable
 	 * @param hasHeader treat the first line as header
 	 * @param fixNumFields ensure all records have the same number of fields
 	 * @param distinctFieldNames check that the header fields are distinct
+	 * @param fieldSeparator the field separator, e.g., a comma or semicolon
+	 * @param lineSeparator the line ending, i.e., either {@link #CR} ({@value #CR}), {@link #LF} ({@value #LF})  or {@link #CR_LF} ({@value #CR_LF})
 	 * @throws IOException If an I/O error occurs
 	 * @throws CsvFormatException If a CSV syntax error occurs
 	 */
-	public CsvReader(Reader reader, boolean hasHeader, boolean fixNumFields, boolean distinctFieldNames) throws IOException, CsvFormatException
+	public CsvReader(BasicReader reader, boolean hasHeader, boolean fixNumFields, boolean distinctFieldNames, int fieldSeparator, int lineSeparator) throws IOException, CsvFormatException
 	{
-		this.input = new LineEndConvertingReader(reader);
+		this.fieldSeparator = fieldSeparator;
+		switch (lineSeparator) {
+		case CR:
+			this.lineSeparator = "\r";
+			this.input = reader.convert(CR).to(EOL).peekable();
+			break;
+		case LF:
+			this.lineSeparator = "\n";
+			this.input = reader.convert(LF).to(EOL).peekable();
+			break;
+		case CR_LF:
+			this.lineSeparator = "\r\n";
+			this.input = reader.convert(CR, LF).to(EOL).peekable();
+			break;
+		default:
+			throw new IllegalArgumentException("Expected lineSeparator to be either CR (" + CR + "), LF (" + LF + ") or CR_LF" + (CR_LF) + ") but got: " + lineSeparator);
+		}
+		this.line = 1;
+		this.column = 0;
 		this.numFields = fixNumFields ? 0 : -1;
 		if (hasHeader) {
 			header = nextRecord();
 			if (! hasNextRecord()) {
-				throw new CsvFormatException("no record found except for header", input.getLine());
+				throw new CsvFormatException("no record found except for header", line);
 			}
 			if (distinctFieldNames) {
 				Set<String>fieldNames = new HashSet<String>();
@@ -123,7 +168,35 @@ public class CsvReader implements AutoCloseable
 	 */
 	public int getLine()
 	{
-		return input.getLine();
+		return line;
+	}
+
+	/**
+	 * Read a single character from the input and update the counters {@code line} and {@code column}.
+	 * 
+	 * @return returns The next character as an integer in the range of 0 to 65536 or {@link #EOF} ({@value #EOF})
+	 * @throws IOException If and I/O error occurs
+	 */
+	protected int read() throws IOException
+	{
+		int current = input.read();
+		if (current == EOL) {
+			line += 1;
+			column = 0;
+		} else {
+			column += 1;
+		}
+		return current;
+	}
+
+	/**
+	 * Peek the next character without advancing the underlying reader.
+	 * 
+	 * @return returns The next character as an integer in the range of 0 to 65536 or {@link #EOF} ({@value #EOF})
+	 */
+	public int peek()
+	{
+		return input.peek();
 	}
 
 	/**
@@ -149,14 +222,14 @@ public class CsvReader implements AutoCloseable
 			throw new NoSuchElementException();
 		}
 		String[] nextRecord = readRecord();
-		if (input.peek() == EOL) {
-			input.read();
+		if (peek() == EOL) {
+			read();
 		}
-		if (input.peek() == EOF) {
+		if (peek() == EOF) {
 			hasNextRecord = false;
 		}
 		if (numFields > 0 && nextRecord.length != numFields) {
-			throw new CsvFormatException("records contain different numbers of fields", input.getLine() - 1);
+			throw new CsvFormatException("records contain different numbers of fields", line);
 		} else if (numFields == 0) {
 			numFields = nextRecord.length;
 		}
@@ -177,9 +250,9 @@ public class CsvReader implements AutoCloseable
 		do {
 			String field = readField();
 			record.add(field);
-			next = input.peek();
-			if (next == SEPARATOR) {
-				input.read();
+			next = peek();
+			if (next == fieldSeparator) {
+				read();
 			}
 		} while (! isEndOfRecord(next));
 		return record.toArray(STRING_ARRAY);
@@ -211,29 +284,33 @@ public class CsvReader implements AutoCloseable
 	 */
 	protected String readQuotedField() throws IOException, CsvFormatException
 	{
-		if (input.peek() != DOUBLE_QUOTES) {
+		if (peek() != DOUBLE_QUOTES) {
 			return null;
 		}
-		input.read(); // Skip opening double quotes
+		read(); // Skip opening double quotes
 		StringBuilder field = new StringBuilder();
-		while (input.hasNext()) {
-			int character = input.read();
+		while (peek() != EOF) {
+			int character = read();
 			if (character == DOUBLE_QUOTES) {
-				int next = input.peek();
+				int next = peek();
 				if (next == DOUBLE_QUOTES) {
 					// 1. Escaped double quotes
-					input.read();
+					read();
 				} else if (isEndOfField(next)) {
 					// 2. Closing double quotes
 					return field.toString();
 				} else {
 					// 3. Error
-					throw new CsvFormatException("double quotes (\") in quoted field not escaped (\"\")", input.getLine(), input.getColumn());
+					throw new CsvFormatException("double quotes (\") in quoted field not escaped (\"\")", line, column);
 				}
 			}
-			field.append((char) character);
+			if (character == EOL) {
+				field.append(lineSeparator);
+			} else {
+				field.append((char) character);
+			}
 		}
-		throw new CsvFormatException("double quotes (\") missing to close quoted field", input.getLine(), input.getColumn());
+		throw new CsvFormatException("double quotes (\") missing to close quoted field", line, column);
 	}
 
 	/**
@@ -246,10 +323,10 @@ public class CsvReader implements AutoCloseable
 	protected String readPlainField() throws IOException, CsvFormatException
 	{
 		StringBuilder field = new StringBuilder();
-		while (! isEndOfField(input.peek())) {
-			int character = input.read();
+		while (! isEndOfField(peek())) {
+			int character = read();
 			if (character == DOUBLE_QUOTES) {
-				throw new CsvFormatException("double quotes (\") found in non-quoted field", input.getLine(), input.getColumn());
+				throw new CsvFormatException("double quotes (\") found in non-quoted field", line, column);
 			}
 			field.append((char) character);
 		}
@@ -262,9 +339,9 @@ public class CsvReader implements AutoCloseable
 	 * @param character the character to check
 	 * @return {@code true} if the character is the end of a field
 	 */
-	protected static boolean isEndOfField(int character)
+	protected boolean isEndOfField(int character)
 	{
-		return character == SEPARATOR || isEndOfRecord(character);
+		return character == fieldSeparator || isEndOfRecord(character);
 	}
 
 	/**
@@ -273,7 +350,7 @@ public class CsvReader implements AutoCloseable
 	 * @param character the character to check
 	 * @return {@code true} if the character is the end of a record
 	 */
-	protected static boolean isEndOfRecord(int character)
+	protected boolean isEndOfRecord(int character)
 	{
 		return character == EOL || character == EOF;
 	}
@@ -287,26 +364,32 @@ public class CsvReader implements AutoCloseable
 		System.out.println("CSV with single empty record:\n---");
 		System.out.println(emptyCsv);
 		System.out.println("---\nRecords:");
-		CsvReader emptyRecords = new CsvReader(new BufferedReader(new StringReader(emptyCsv)), false, true);
-		int i = 1;
-		while (emptyRecords.hasNextRecord()) {
-			System.out.println((i++) + ": " + Arrays.toString(emptyRecords.nextRecord()));
+		try (BasicReader reader = new BasicReader.Wrapper(new StringReader(emptyCsv));
+				BasicReader normalized = reader.convert(CR, LF).convert(CR).to(LF);
+				CsvReader emptyRecords = new CsvReader(normalized, false, true, true, COMMA, LF)) {
+			int i = 1;
+			while (emptyRecords.hasNextRecord()) {
+				System.out.println((i++) + ": " + Arrays.toString(emptyRecords.nextRecord()));
+			}
 		}
 
-		String mixedCsv = "h1,h2,h3\r"
-				+ "plain,\"quoted\",\"quotes\"\"\",\"\"\n"
-				+ ",1,2,3,4\n"
+		String mixedCsv = "h1;h2;h3\r"
+				+ "plain;\"quoted\";\"quotes\"\"\";\"\"\n"
+				+ ";1;2;3;4\n"
 				+ "\r\n"
-				+ ",,\n";
+				+ ";;\n";
 		System.out.println();
 		System.out.println("CSV with mixed and quoted records:\n---");
 		System.out.println(mixedCsv);
 		System.out.println("---\nRecords:");
-		CsvReader mixedRecords = new CsvReader(new BufferedReader(new StringReader(mixedCsv)), true, false);
-		System.out.println("H: " + Arrays.toString(mixedRecords.getHeader()));
-		int j = 1;
-		while (mixedRecords.hasNextRecord()) {
-			System.out.println((j++) + ": " + Arrays.toString(mixedRecords.nextRecord()));
+		try (BasicReader reader = new BasicReader.Wrapper(new StringReader(mixedCsv));
+				BasicReader normalized = reader.convert(CR, LF).convert(CR).to(LF);
+				CsvReader mixedRecords = new CsvReader(normalized, true, false, true, ';', LF)) {
+			System.out.println("H: " + Arrays.toString(mixedRecords.getHeader()));
+			int j = 1;
+			while (mixedRecords.hasNextRecord()) {
+				System.out.println((j++) + ": " + Arrays.toString(mixedRecords.nextRecord()));
+			}
 		}
 	}
 }
