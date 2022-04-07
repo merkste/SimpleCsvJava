@@ -9,8 +9,6 @@ import java.io.IOException;
  */
 public abstract class ReplacingReader<T extends BasicReader> implements BasicReader
 {
-	public static final int CR = '\r';
-	public static final int LF = '\n';
 	public static final int REPLACE = -2;
 
 	public final T source;
@@ -81,7 +79,7 @@ public abstract class ReplacingReader<T extends BasicReader> implements BasicRea
 		/**
 		 * Read a single character from the input.
 		 * 
-		 * @return returns The next character as an integer in the range of 0 to 65536, {@link BasicReader#EOF} ({@value BasicReader#EOF}) or {@link #REPLACE} ({@value #REPLACE})
+		 * @return The next character as an integer in the range of 0 to 65536, {@link BasicReader#EOF} ({@value BasicReader#EOF}) or {@link #REPLACE} ({@value #REPLACE})
 		 * @throws IOException If and I/O error occurs
 		 */
 		@Override
@@ -131,7 +129,7 @@ public abstract class ReplacingReader<T extends BasicReader> implements BasicRea
 		/**
 		 * Read a single character from the input.
 		 * 
-		 * @return returns The next character as an integer in the range of 0 to 65536, {@link BasicReader#EOF} ({@value BasicReader#EOF}) or {@link #REPLACE} ({@value #REPLACE})
+		 * @return The next character as an integer in the range of 0 to 65536, {@link BasicReader#EOF} ({@value BasicReader#EOF}) or {@link #REPLACE} ({@value #REPLACE})
 		 * @throws IOException If and I/O error occurs
 		 */
 		@Override
